@@ -1,101 +1,151 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ballonslack</title>
-<style>
-  :root {
-    --bg: #0b0e14;
-    --panel: #10141f;
-    --text: #e6edf3;
-    --muted: #9aa6b2;
-    --accent: #7aa2f7;
-    --good: #28c581;
-    --warn: #ffb454;
-    --bad:  #f7768e;
-    --line: #1f2433;
-  }
-  * { box-sizing: border-box; }
-  html, body { height: 100vh; margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, "Noto Sans"; overflow: hidden; }
-  .app { display: flex; height: 100%; }
-  .left {
-    width: 360px; max-width: 400px; padding: 12px 14px; background: var(--panel);
-    border-right: 1px solid var(--line); height: 100%; overflow: auto;
-  }
-  .right { position: relative; flex: 1; display: flex; padding: 12px; height: 100%; }
-  .canvas-wrap { flex: 1; display: flex; align-items: stretch; justify-content: stretch; }
-  canvas { width: 100%; height: 100%; background: linear-gradient(180deg, #0b0e14 0%, #0b0e14 70%, #0d1117 70%); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
-  h1 { margin: 0 0 6px; font-size: 18px; font-weight: 700; letter-spacing: .2px; }
-  .small { font-size: 12px; color: var(--muted); }
-  .box { background: #0d1220; border: 1px dashed #1f2942; border-radius: 10px; padding: 10px 12px; color: var(--muted); }
-  .ok { color: var(--good); }
-  .bad { color: var(--bad); }
-  .warnText { color: var(--warn); }
+  <!--
+    ballonslack — static-equilibrium visualizer for a chimney–mass–balloon system (dark, minimalist)
 
-  /* Sliders */
-  input[type="range"] { width: 100%; -webkit-appearance: none; background: transparent; height: 28px; }
-  input[type="range"]::-webkit-slider-runnable-track { height: 6px; background: #1c2233; border-radius: 4px; border: 1px solid #212a40; }
-  input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none; margin-top: -6px; width: 18px; height: 18px; border-radius: 50%;
-    background: var(--accent); border: 0; box-shadow: 0 0 0 4px rgba(122,162,247,.2);
-  }
+    This file is self-contained and heavily commented. It renders a 400 m × 400 m world:
+      • Chimney top anchor at (0,300)
+      • Ground anchor at (D2,0)
+      • Rope R1 (chimney↔balloon) split internally at a payload (80 kg) at distance D1 from the chimney
+      • Rope R2 (balloon↔ground)
+      • Balloon with net upward force ≈ +10 kN (15 kN thrust − 510 kg × g)
+      • Optional horizontal wind force Fw_b acting only on the balloon
 
-  .group { padding: 10px 12px; border: 1px solid #1f2942; border-radius: 12px; background: #0d1220; margin: 10px 0; position: relative; }
-  .group::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; border-radius:12px 0 0 12px; background: var(--slider, #3a4160); }
-  .group .title { display:flex; align-items:center; gap:8px; font-weight:700; margin-bottom:6px; }
-  .group .title .chip { width:10px; height:10px; border-radius:50%; background: var(--slider, #3a4160); }
-  .group input[type="range"]::-webkit-slider-runnable-track { background:
-      linear-gradient(0deg, var(--slider-tint, rgba(255,255,255,0.06)), var(--slider-tint, rgba(255,255,255,0.06))),
-      #1c2233; }
-  .group input[type="range"]::-webkit-slider-thumb { background: var(--slider, #3a4160); box-shadow: 0 0 0 4px var(--ring, rgba(255,255,255,0.15)); }
-  .r1 { --slider:#8bd5ff; --slider-tint: rgba(139,213,255,0.12); --ring: rgba(139,213,255,0.20); }
-  .r2 { --slider:#c3e88d; --slider-tint: rgba(195,232,141,0.12); --ring: rgba(195,232,141,0.20); }
-  .rw { --slider:#f6c177; --slider-tint: rgba(246,193,119,0.12); --ring: rgba(246,193,119,0.20); }
+    Physics:
+      • Parameterize the balloon on R2 by angle β: (xb,yb) = (D2 − L2·cosβ, L2·sinβ)
+      • Solve mass coordinates (xs,ys) from fixed lengths L1a = D1 and L1b = L1 − D1
+      • Accept only valid geometry (distance tolerances, coordinates ≥ 0, and xs ≤ xb)
+      • Minimize U = Fg_s·ys + Fg_b·yb − Fw_b·xb over β (Fg_b negative for buoyancy)
+      • Compute tensions from node equilibria:
+          Balloon: T2·u2b + T3·u3b + (Fw_b, B) = 0
+          Mass:    T1·u1m + T2·u2m + (0, −W)  = 0
+        (u vectors point away from the node; reject slack/negative tensions)
 
-  .label { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; color: var(--muted); font-size: 12px; gap: 6px; }
-  .nums { font-variant-numeric: tabular-nums; color: var(--text); }
-  .unit { color: var(--muted); margin-left: 4px; }
+    UI:
+      • Left: sliders (L1,D1,L2,D2), discrete wind slider (−5000..5000 N step 500), wind visibility checkbox, simulate & play/pause
+      • Right: large canvas with grid, shaded reach discs, chimney/balloon sprites, payload sprite
+      • Top-right of the canvas: “Tension” panel (kN, 1 decimal) for R1 @ chimney and R2 @ ground
+      • Wind particles visualize |Fw_b| (purely cosmetic)
 
-  .btns { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 10px; }
-  button {
-    background: #1b2333; color: var(--text); border: 1px solid #263045; border-radius: 10px; padding: 10px 12px;
-    cursor: pointer; font-weight: 600; letter-spacing: .2px;
-  }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #0b0e14; }
-  button:disabled { opacity: .6; cursor: not-allowed; }
+    Implementation:
+      • On “Simulate”, precompute 100 D1 positions for ALL 21 wind steps; animate between 20%..80% of R1
+      • While animating, changing the wind snaps to nearest valid precomputed pose without stopping
+      • Cache-busting: VERSION string appended to asset URLs; no-cache meta headers included
+  -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  /* HUD (top-right overlay) */
-  .hud {
-    position: absolute; top: 12px; right: 12px;
-    background: rgba(9,12,20,0.8); border: 1px solid #1b2440; backdrop-filter: blur(4px);
-    border-radius: 10px; padding: 10px 12px; min-width: 220px;
-    box-shadow: 0 6px 20px rgba(0,0,0,.25); font-size: 12px; color: #cbd5e1;
-  }
-  .hud .row { display:flex; justify-content:space-between; gap: 12px; margin: 4px 0; }
-  .hud .name { color:#94a3b8; }
-  .hud .val { font-variant-numeric: tabular-nums; color:#e6edf3; }
+  <!-- Best-effort cache busters for the HTML document itself -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
 
-  /* Checkbox styling (subtle) */
-  .checkline { display:flex; align-items:center; gap:8px; margin-top:6px; color: var(--muted); }
-  .checkline input[type="checkbox"] { width:16px; height:16px; accent-color:#f6c177; }
-</style>
+  <title>ballonslack</title>
+  <style>
+    :root {
+      --bg: #0b0e14;
+      --panel: #10141f;
+      --text: #e6edf3;
+      --muted: #9aa6b2;
+      --accent: #7aa2f7;
+      --good: #28c581;
+      --warn:  #ffb454;
+      --bad:   #f7768e;
+      --line:  #1f2433;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100vh; margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Inter,"Helvetica Neue",Arial,"Noto Sans"; overflow: hidden; }
+    .app { display: flex; height: 100%; }
+    .left {
+      width: 360px; max-width: 400px; padding: 12px 14px; background: var(--panel);
+      border-right: 1px solid var(--line); height: 100%; overflow: auto;
+    }
+    .right { position: relative; flex: 1; display: flex; padding: 12px; height: 100%; }
+    .canvas-wrap { position: relative; flex: 1; display: flex; align-items: stretch; justify-content: stretch; }
+    canvas { width: 100%; height: 100%; background: linear-gradient(180deg, #0b0e14 0%, #0b0e14 70%, #0d1117 70%); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    h1 { margin: 0 0 6px; font-size: 18px; font-weight: 700; letter-spacing: .2px; }
+    .small { font-size: 12px; color: var(--muted); }
+    .box { background: #0d1220; border: 1px dashed #1f2942; border-radius: 10px; padding: 10px 12px; color: var(--muted); }
+    .ok   { color: var(--good); }
+    .bad  { color: var(--bad); }
+    .warnText { color: var(--warn); }
+
+    /* Sliders */
+    input[type="range"] { width: 100%; -webkit-appearance: none; background: transparent; height: 28px; }
+    input[type="range"]::-webkit-slider-runnable-track { height: 6px; background: #1c2233; border-radius: 4px; border: 1px solid #212a40; }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; margin-top: -6px; width: 18px; height: 18px; border-radius: 50%;
+      background: var(--accent); border: 0; box-shadow: 0 0 0 4px rgba(122,162,247,.2);
+    }
+
+    .group { padding: 10px 12px; border: 1px solid #1f2942; border-radius: 12px; background: #0d1220; margin: 10px 0; position: relative; }
+    .group::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; border-radius:12px 0 0 12px; background: var(--slider, #3a4160); }
+    .group .title { display:flex; align-items:center; gap:8px; font-weight:700; margin-bottom:6px; }
+    .group .title .chip { width:10px; height:10px; border-radius:50%; background: var(--slider, #3a4160); }
+    .group input[type="range"]::-webkit-slider-runnable-track {
+      background: linear-gradient(0deg, var(--slider-tint, rgba(255,255,255,0.06)), var(--slider-tint, rgba(255,255,255,0.06))), #1c2233;
+    }
+    .group input[type="range"]::-webkit-slider-thumb {
+      background: var(--slider, #3a4160); box-shadow: 0 0 0 4px var(--ring, rgba(255,255,255,0.15));
+    }
+    .r1 { --slider:#8bd5ff; --slider-tint: rgba(139,213,255,0.12); --ring: rgba(139,213,255,0.20); }
+    .r2 { --slider:#c3e88d; --slider-tint: rgba(195,232,141,0.12); --ring: rgba(195,232,141,0.20); }
+    .rw { --slider:#f6c177; --slider-tint: rgba(246,193,119,0.12); --ring: rgba(246,193,119,0.20); }
+
+    .label { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; color: var(--muted); font-size: 12px; gap: 6px; }
+    .nums { font-variant-numeric: tabular-nums; color: var(--text); }
+    .unit { color: var(--muted); margin-left: 4px; }
+
+    .btns { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 10px; }
+    button {
+      background: #1b2333; color: var(--text); border: 1px solid #263045; border-radius: 10px; padding: 10px 12px;
+      cursor: pointer; font-weight: 600; letter-spacing: .2px;
+    }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #0b0e14; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+
+    /* HUD (Tension panel) — positioned inside the canvas area */
+    .hud {
+      position: absolute;
+      top: 10px; right: 10px;            /* small padding from the canvas edges */
+      background: rgba(9,12,20,0.85);
+      border: 1px solid #1b2440;
+      backdrop-filter: blur(4px);
+      border-radius: 10px;
+      padding: 10px 12px;
+      min-width: 220px;
+      box-shadow: 0 6px 20px rgba(0,0,0,.25);
+      font-size: 12px; color: #cbd5e1;
+      z-index: 5;                         /* above canvas content */
+      pointer-events: none;               /* don’t block canvas interactions */
+    }
+    .hud .title { font-weight: 800; color:#e6edf3; margin-bottom: 4px; }
+    .hud .row { display:flex; justify-content:space-between; gap: 12px; margin: 4px 0; }
+    .hud .name { color:#94a3b8; }
+    .hud .val  { font-variant-numeric: tabular-nums; color:#e6edf3; }
+  </style>
 </head>
 <body>
 <div class="app">
+  <!-- LEFT CONTROL PANEL -->
   <div class="left">
     <h1>ballonslack</h1>
 
-    <div class="box small" id="statusBox">Set lengths, anchors, and wind. Click <b>Simulate</b> to precompute (for all wind steps) and animate a static equilibrium path; adjust wind live.</div>
+    <div class="box small" id="statusBox">
+      Set lengths, anchors, and wind. Click <b>Simulate</b> to precompute (for all wind steps) and animate a static equilibrium path; adjust wind live.
+    </div>
 
+    <!-- Rope R1 (chimney ↔ balloon) + mass position D1 -->
     <div class="group r1">
-      <div class="title"><span class="chip"></span>R1 — chimney ↔ balloon (split internally)</div>
+      <div class="title"><span class="chip"></span>R1 — chimney ↔ balloon</div>
       <div class="label"><span>L1 (max length)</span><span class="nums" id="valL1">100</span><span class="unit">m</span></div>
       <input type="range" min="10" max="400" step="1" value="100" id="l1">
       <div class="label"><span>D1 (mass along R1)</span><span class="nums" id="valD1">50</span><span class="unit">m</span></div>
       <input type="range" min="0" max="100" step="1" value="50" id="d1">
     </div>
 
+    <!-- Rope R2 (ground ↔ balloon) -->
     <div class="group r2">
       <div class="title"><span class="chip"></span>R2 — ground ↔ balloon</div>
       <div class="label"><span>L2 (max length)</span><span class="nums" id="valL2">305</span><span class="unit">m</span></div>
@@ -104,39 +154,51 @@
       <input type="range" min="0" max="400" step="1" value="130" id="d2">
     </div>
 
+    <!-- Wind controls -->
     <div class="group rw">
       <div class="title"><span class="chip"></span>Wind on balloon</div>
       <div class="label"><span>F<sub>w,b</sub> (left ⟵ 0 ⟶ right)</span><span class="nums" id="valFW">0</span><span class="unit">N</span></div>
+      <!-- Discrete steps of 500 N, from -5000..5000 -->
       <input type="range" min="-5000" max="5000" step="500" value="0" id="fw">
       <label class="checkline"><input type="checkbox" id="windVisible" checked> wind visible</label>
     </div>
 
+    <!-- Actions -->
     <div class="btns">
       <button class="primary" id="btnSimulate">Simulate</button>
       <button id="btnPlayPause" disabled>Pause</button>
     </div>
 
+    <!-- Two simple bullets with key facts -->
     <div class="foot small" style="margin-top:10px;">
-      Net balloon up-force uses your inputs: up-thrust <b>15 kN</b> and balloon mass <b>510 kg</b> (net ≈ +10 kN). The 80&nbsp;kg mass is at <b>D1</b> on R1.
+      <ul style="margin:6px 0 0 16px; padding:0;">
+        <li>Balloon thrust 15&nbsp;kN; balloon mass 510&nbsp;kg (net ≈ +10&nbsp;kN up)</li>
+        <li>Payload mass 80&nbsp;kg at D1 on R1</li>
+      </ul>
     </div>
   </div>
 
+  <!-- RIGHT: CANVAS & HUD (HUD sits inside the canvas container, top-right) -->
   <div class="right">
     <div class="canvas-wrap">
       <canvas id="cv" aria-label="Static equilibrium canvas"></canvas>
-    </div>
 
-    <!-- HUD with tensions -->
-    <div class="hud" id="hud">
-      <div class="row"><span class="name">R1 @ chimney</span><span class="val" id="hudR1">—</span></div>
-      <div class="row"><span class="name">R2 @ ground</span><span class="val" id="hudR2">—</span></div>
+      <!-- Tension readout in kN (rounded to one decimal) -->
+      <div class="hud" id="hud">
+        <div class="title">Tension</div>
+        <div class="row"><span class="name">R1 @ chimney</span><span class="val" id="hudR1">—</span></div>
+        <div class="row"><span class="name">R2 @ ground</span><span class="val" id="hudR2">—</span></div>
+      </div>
     </div>
   </div>
 </div>
 
 <script>
 (() => {
-  // ====== Canvas & world ======
+  // VERSION string for cache-busting assets (append ?v=VERSION)
+  const VERSION = 'v2025-10-20-02';
+
+  // -------- World & UI handles --------
   const world = { W: 400, H: 400 };
   const ui = {
     canvas: document.getElementById('cv'),
@@ -145,7 +207,6 @@
     status: document.getElementById('statusBox'),
     btnSim: document.getElementById('btnSimulate'),
     btnPlayPause: document.getElementById('btnPlayPause'),
-    // sliders & inputs
     l1: document.getElementById('l1'),
     d1: document.getElementById('d1'),
     l2: document.getElementById('l2'),
@@ -157,68 +218,58 @@
     vL2: document.getElementById('valL2'),
     vD2: document.getElementById('valD2'),
     vFW: document.getElementById('valFW'),
-    // HUD
     hudR1: document.getElementById('hudR1'),
     hudR2: document.getElementById('hudR2'),
   };
 
-  // Assets
+  // -------- Assets (with cache-busting) --------
   const assets = {
     balloon: new Image(),
     chimney: new Image(),
     konn: new Image(),
-    balloonH: 24, // world m
-    konnH: 12
+    balloonH: 24, // meters tall render
+    konnH: 12     // meters tall render
   };
-  assets.balloon.src = 'balloon.svg';
-  assets.chimney.src = 'chimney.svg';
-  assets.konn.src = 'konn.png';
+  assets.balloon.src = 'balloon.svg?' + VERSION;
+  assets.chimney.src = 'chimney.svg?' + VERSION;
+  assets.konn.src    = 'konn.png?'    + VERSION;
   assets.balloon.onload = drawPreviewWithWind;
   assets.chimney.onload = drawPreviewWithWind;
-  assets.konn.onload = drawPreviewWithWind;
+  assets.konn.onload    = drawPreviewWithWind;
 
-  // Params (units: m, kg, N)
+  // -------- Parameters (SI units) --------
   const params = {
-    l1: 100,      // total chimney↔balloon
-    d1: 50,       // mass position along R1
-    l2: 305,      // ground rope (default updated)
-    d2: 130,      // ground anchor x (default updated)
-    Fw_b: 0,      // wind force on balloon (+x right, -x left)
+    l1: 100, d1: 50, l2: 305, d2: 130,
+    Fw_b: 0,
     windVisible: true,
     gridStep: 25,
     gravity: 9.81,
-    weightMass: 80,        // kg (mass on R1)
+    weightMass: 80,        // kg
     balloonMass: 510,      // kg
-    balloonUpThrust: 15000 // N upward
+    balloonUpThrust: 15000 // N
   };
 
-  // Discrete wind steps
+  // Discrete wind levels (precomputation grid)
   const WIND_STEPS = Array.from({length: 21}, (_,i)=> -5000 + i*500);
-  const nearestWindStep = (v) => {
-    const clamped = Math.max(-5000, Math.min(5000, Math.round(v/500)*500));
-    return clamped;
-  };
+  const nearestWindStep = v => Math.max(-5000, Math.min(5000, Math.round(v/500)*500));
 
-  // Animation control
+  // -------- Animation state --------
   const N_FRAMES = 100;
   let anim = {
-    running: false,
-    paused: false,
-    index: 0,
-    dir: 1,
-    lastTime: 0,
-    frameInterval: 33, // ~30 FPS
+    running: false, paused: false,
+    index: 0, dir: 1,
+    lastTime: 0, frameInterval: 33,
     idxMin: Math.round(0.20 * (N_FRAMES - 1)),
     idxMax: Math.round(0.80 * (N_FRAMES - 1)),
     autoResumeAfterDrag: false,
-    windStep: 0 // current discrete wind step value
+    windStep: 0
   };
-  let frames = []; // alias to currently selected wind's frames
-  let precompByWind = new Map(); // windStep -> frames[]
+  let frames = [];
+  let precompByWind = new Map();
   let suppressSliderInput = false;
   let isDraggingSlider = false;
 
-  // Wind particles
+  // -------- Wind particles (visual only) --------
   const wind = {
     particles: [],
     lastTime: 0,
@@ -226,53 +277,47 @@
     alpha: 0,
     alphaTarget: 0,
     N: 90,
-    MAX_SPEED: 140,     // m/s at |Fw_b| = 5000
+    MAX_SPEED: 140,
     TRAIL_T: 0.18
   };
   function initWindParticles() {
     wind.particles = [];
     for (let i = 0; i < wind.N; i++) {
       wind.particles.push({
-        x: Math.random() * world.W,
-        y: Math.random() * (world.H - 8) + 4,
+        x: Math.random()*world.W,
+        y: Math.random()*(world.H-8)+4,
         sf: 0.6 + Math.random()*0.8,
-        wobble: Math.random() * Math.PI * 2
+        wobble: Math.random()*Math.PI*2
       });
     }
   }
   function updateWindTargets() {
-    const f = Math.min(1, Math.abs(params.Fw_b) / 5000);
+    const f = Math.min(1, Math.abs(params.Fw_b)/5000);
     wind.alphaTarget = (params.windVisible ? Math.pow(f, 0.8) : 0);
   }
   function updateWind(dt) {
-    updateWindTargets();
-    const k = Math.min(1, dt * 4);
-    wind.alpha += (wind.alphaTarget - wind.alpha) * k;
-
+    const k = Math.min(1, dt*4);
+    wind.alpha += (wind.alphaTarget - wind.alpha)*k;
     const dir = Math.sign(params.Fw_b) || 1;
-    const speed = (Math.abs(params.Fw_b) / 5000) * wind.MAX_SPEED;
+    const speed = (Math.abs(params.Fw_b)/5000)*wind.MAX_SPEED;
     const vyScale = 0.03;
     for (const p of wind.particles) {
-      const vx = dir * speed * p.sf;
-      p.wobble += dt * (0.6 + 0.8 * p.sf);
-      const vy = Math.sin(p.wobble) * vyScale;
-      p.x += vx * dt;
-      p.y += vy;
-
+      const vx = dir*speed*p.sf;
+      p.wobble += dt*(0.6 + 0.8*p.sf);
+      p.x += vx*dt;
+      p.y += Math.sin(p.wobble)*vyScale;
       const margin = 12;
-      if (dir > 0 && p.x > world.W + margin) { p.x = -margin; p.y = Math.random() * (world.H - 8) + 4; }
-      if (dir < 0 && p.x < -margin)         { p.x = world.W + margin; p.y = Math.random() * (world.H - 8) + 4; }
-      if (p.y < 2) p.y = 2;
-      if (p.y > world.H - 2) p.y = world.H - 2;
+      if (dir>0 && p.x>world.W+margin){ p.x=-margin; p.y=Math.random()*(world.H-8)+4; }
+      if (dir<0 && p.x<-margin){ p.x=world.W+margin; p.y=Math.random()*(world.H-8)+4; }
+      if (p.y<2) p.y=2; if (p.y>world.H-2) p.y=world.H-2;
     }
   }
   function drawWindParticles() {
     if (wind.alpha < 0.02) return;
     const ctx = ui.ctx;
     const dir = Math.sign(params.Fw_b) || 1;
-    const speed = (Math.abs(params.Fw_b) / 5000) * wind.MAX_SPEED;
+    const speed = (Math.abs(params.Fw_b)/5000)*wind.MAX_SPEED;
     const trail = wind.TRAIL_T * speed;
-
     ctx.save();
     ctx.globalAlpha = 0.06 + 0.30 * wind.alpha;
     ctx.lineWidth = 2;
@@ -280,123 +325,105 @@
     ctx.lineCap = 'round';
     for (const p of wind.particles) {
       const x2 = toScreen({x:p.x, y:p.y});
-      const x1 = toScreen({x:p.x - dir * (trail * p.sf), y:p.y});
-      ctx.beginPath();
-      ctx.moveTo(x1.x, x1.y);
-      ctx.lineTo(x2.x, x2.y);
-      ctx.stroke();
+      const x1 = toScreen({x:p.x - dir*(trail*p.sf), y:p.y});
+      ctx.beginPath(); ctx.moveTo(x1.x, x1.y); ctx.lineTo(x2.x, x2.y); ctx.stroke();
     }
     ctx.restore();
   }
   function startWindLoop() {
     if (wind.loopActive) return;
-    wind.loopActive = true;
-    wind.lastTime = 0;
-    requestAnimationFrame(windLoop);
+    wind.loopActive = true; wind.lastTime = 0;
+    requestAnimationFrame(function loop(t){
+      if (!wind.loopActive) return;
+      if (!wind.lastTime) wind.lastTime = t;
+      const dt = Math.min(0.05, (t - wind.lastTime)/1000);
+      wind.lastTime = t;
+      updateWindTargets(); updateWind(dt);
+      drawPreview(); drawWindParticles();
+      requestAnimationFrame(loop);
+    });
   }
-  function stopWindLoop() { wind.loopActive = false; }
-  function windLoop(t) {
-    if (!wind.loopActive) return;
-    if (!wind.lastTime) wind.lastTime = t;
-    const dt = Math.min(0.05, (t - wind.lastTime) / 1000);
-    wind.lastTime = t;
-    updateWind(dt);
-    drawPreview();
-    drawWindParticles();
-    requestAnimationFrame(windLoop);
-  }
+  function stopWindLoop(){ wind.loopActive = false; }
 
-  // ====== Utilities ======
+  // -------- Utilities --------
   const clamp  = (v,a,b)=>Math.max(a,Math.min(b,v));
   const nearly = (a,b,eps=1e-3)=>Math.abs(a-b) <= eps;
-  const fmtN   = n => Math.round(n).toLocaleString('en-US') + ' N';
 
-  function toScreen(p) {
-    const c = ui.canvas;
-    const pad = 12;
+  // Format a force in kN with 1 decimal
+  const fmtKN1 = n => (Number(n)/1000).toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:1}) + ' kN';
+
+  function toScreen(p){
+    const c = ui.canvas, pad = 12;
     const w = c.clientWidth - pad*2, h = c.clientHeight - pad*2;
-    const s = Math.min(w / world.W, h / world.H);
-    const ox = (c.clientWidth - s * world.W) * 0.5;
-    const oy = (c.clientHeight + s * world.H) * 0.5;
-    return { x: ox + p.x * s, y: oy - p.y * s, scale: s, ox, oy };
+    const s = Math.min(w/world.W, h/world.H);
+    const ox = (c.clientWidth - s*world.W)*0.5;
+    const oy = (c.clientHeight + s*world.H)*0.5;
+    return { x: ox + p.x*s, y: oy - p.y*s, scale: s, ox, oy };
   }
-  function anchors() {
-    return { A1: { x: 0, y: 300 }, A2: { x: clamp(params.d2,0,400), y: 0 } };
-  }
-  function netBalloonUpForce() {
-    return params.balloonUpThrust - params.balloonMass * params.gravity;
-  }
+  function anchors(){ return { A1:{x:0,y:300}, A2:{x:clamp(params.d2,0,400), y:0} }; }
+  function netBalloonUpForce(){ return params.balloonUpThrust - params.balloonMass*params.gravity; }
 
-  // ====== Geometry & energy ======
-  function coordinates(beta, l1a, l1b, l2, d1_py, d2_py) {
-    const xb = d2_py - l2 * Math.cos(beta);
-    const yb = l2 * Math.sin(beta);
-    const dx = xb;
-    const dy = d1_py - yb;
-    const side = Math.hypot(dx, dy);
+  // -------- Geometry & validity --------
+  function coordinates(beta, l1a, l1b, l2, d1_py, d2_py){
+    const xb = d2_py - l2*Math.cos(beta);
+    const yb = l2*Math.sin(beta);
+    const dx = xb, dy = d1_py - yb;
+    const side = Math.hypot(dx,dy);
     if (side <= 1e-8 || l1a <= 1e-8) return null;
     const gamma1 = Math.atan2(dy, dx);
-    let arg = (l1a*l1a + side*side - l1b*l1b) / (2 * l1a * side);
+    let arg = (l1a*l1a + side*side - l1b*l1b)/(2*l1a*side);
     arg = Math.max(-1, Math.min(1, arg));
     const gamma2 = Math.acos(arg);
     const alpha = gamma1 + gamma2;
-    const xs = l1a * Math.cos(alpha);
-    const ys = d1_py - l1a * Math.sin(alpha);
+    const xs = l1a*Math.cos(alpha);
+    const ys = d1_py - l1a*Math.sin(alpha);
     return { xs, ys, xb, yb };
   }
-  function isValid(beta, l1a, l1b, l2, A1, A2, tol=1e-3) {
+  function isValid(beta, l1a, l1b, l2, A1, A2, tol=1e-3){
     const res = coordinates(beta, l1a, l1b, l2, A1.y, A2.x);
     if (!res) return false;
-    const { xs, ys, xb, yb } = res;
-    const distA = Math.hypot(xs - A1.x, ys - A1.y);
-    const distAB= Math.hypot(xb - xs, yb - ys);
-    const distB = Math.hypot(A2.x - xb, A2.y - yb);
-    const okD = nearly(distA, l1a, tol) && nearly(distAB, l1b, tol) && nearly(distB, l2, tol);
-    const okXY = xs >= 0 && ys >= 0 && xb >= 0 && yb >= 0;
-    const okOrder = xs <= xb;
-    return okD && okXY && okOrder;
+    const {xs,ys,xb,yb} = res;
+    const distA  = Math.hypot(xs-A1.x, ys-A1.y);
+    const distAB = Math.hypot(xb-xs, yb-ys);
+    const distB  = Math.hypot(A2.x-xb, A2.y-yb);
+    const okD   = nearly(distA,l1a,tol) && nearly(distAB,l1b,tol) && nearly(distB,l2,tol);
+    const okXY  = xs>=0 && ys>=0 && xb>=0 && yb>=0;
+    const okOrd = xs<=xb;
+    return okD && okXY && okOrd;
   }
-  function energy(beta, l1a, l1b, l2, A1, A2, Fg_s, Fg_b, Fw_b) {
+
+  // -------- Energy (includes wind) --------
+  function energy(beta, l1a, l1b, l2, A1, A2, Fg_s, Fg_b, Fw_b){
     if (!isValid(beta, l1a, l1b, l2, A1, A2)) return Number.POSITIVE_INFINITY;
-    const { ys, yb, xb } = coordinates(beta, l1a, l1b, l2, A1.y, A2.x);
-    const U_s = Fg_s * ys;
-    const U_b = Fg_b * yb;     // Fg_b negative (upward) in energy
-    const U_w = -Fw_b * xb;    // positive wind right lowers energy with increasing x
-    return U_s + U_b + U_w;
+    const {ys,yb,xb} = coordinates(beta, l1a, l1b, l2, A1.y, A2.x);
+    return Fg_s*ys + Fg_b*yb - Fw_b*xb;
   }
-  function forcesMagnitudes(beta, l1a, l1b, l2, A1, A2, Fg_s, Fg_b, Fw_b, tol=1e-9, allow_slack=false) {
+
+  // -------- Tensions from equilibrium --------
+  function forcesMagnitudes(beta, l1a, l1b, l2, A1, A2, Fg_s, Fg_b, Fw_b, tol=1e-9, allow_slack=false){
     if (!isValid(beta, l1a, l1b, l2, A1, A2)) return null;
-    const { xs, ys, xb, yb } = coordinates(beta, l1a, l1b, l2, A1.y, A2.x);
-    const W = Math.abs(Fg_s);
-    const B = Math.abs(Fg_b);
+    const {xs,ys,xb,yb} = coordinates(beta, l1a, l1b, l2, A1.y, A2.x);
+    const W = Math.abs(Fg_s), B = Math.abs(Fg_b);
 
-    const v1m = { x: A1.x - xs, y: A1.y - ys };
-    const L1  = Math.hypot(v1m.x, v1m.y); if (L1 < 1e-9) return null;
-    const u1m = { x: v1m.x / L1, y: v1m.y / L1 };
+    const v1m = {x:A1.x-xs, y:A1.y-ys}; const L1 = Math.hypot(v1m.x,v1m.y); if (L1<1e-9) return null;
+    const u1m = {x:v1m.x/L1, y:v1m.y/L1};
+    const v2m = {x:xb-xs,   y:yb-ys};   const L2 = Math.hypot(v2m.x,v2m.y); if (L2<1e-9) return null;
+    const u2m = {x:v2m.x/L2, y:v2m.y/L2};
+    const u2b = {x:-u2m.x, y:-u2m.y};
+    const v3b = {x:A2.x-xb, y:A2.y-yb}; const L3 = Math.hypot(v3b.x,v3b.y); if (L3<1e-9) return null;
+    const u3b = {x:v3b.x/L3, y:v3b.y/L3};
 
-    const v2m = { x: xb - xs, y: yb - ys };
-    const L2  = Math.hypot(v2m.x, v2m.y); if (L2 < 1e-9) return null;
-    const u2m = { x: v2m.x / L2, y: v2m.y / L2 };
-
-    const u2b = { x: -u2m.x, y: -u2m.y };
-    const v3b = { x: A2.x - xb, y: A2.y - yb };
-    const L3  = Math.hypot(v3b.x, v3b.y); if (L3 < 1e-9) return null;
-    const u3b = { x: v3b.x / L3, y: v3b.y / L3 };
-
-    // Balloon equilibrium: T2*u2b + T3*u3b + (Fw_b, B) = 0
-    const A00 = u2b.x, A01 = u3b.x;
-    const A10 = u2b.y, A11 = u3b.y;
-    const b0  = -Fw_b, b1 = -B;
+    const A00=u2b.x, A01=u3b.x, A10=u2b.y, A11=u3b.y;
+    const b0=-Fw_b,  b1=-B;
     const det = A00*A11 - A01*A10;
     if (Math.abs(det) < 1e-12) return null;
 
-    const T2 = ( b0*A11 - A01*b1) / det;
-    const T3 = (-b0*A10 + A00*b1) / det;
+    const T2 = ( b0*A11 - A01*b1)/det;
+    const T3 = (-b0*A10 + A00*b1)/det;
 
-    // Mass equilibrium: T1*u1m + T2*u2m + (0,-W) = 0
     let T1;
-    if (Math.abs(u1m.x) > Math.abs(u1m.y)) T1 = -T2 * u2m.x / u1m.x;
-    else                                   T1 = (W - T2 * u2m.y) / u1m.y;
+    if (Math.abs(u1m.x) > Math.abs(u1m.y)) T1 = -T2*u2m.x/u1m.x;
+    else                                    T1 = (W - T2*u2m.y)/u1m.y;
 
     if (!allow_slack && (T1 < -tol || T2 < -tol || T3 < -tol)) return null;
 
@@ -404,313 +431,217 @@
     return { T1: Math.abs(z(T1)), T2: Math.abs(z(T2)), T3: Math.abs(z(T3)), xs, ys, xb, yb };
   }
 
-  // Solve equilibrium for a specific D1 and wind
-  function solveForD1(d1Override, FwOverride) {
-    const { A1, A2 } = anchors();
+  // -------- Solve equilibrium for a specific D1 and wind --------
+  function solveForD1(d1Override, FwOverride){
+    const {A1,A2} = anchors();
     const l1a = Math.max(1e-6, Math.min(d1Override, params.l1));
     const l1b = Math.max(1e-6, Math.max(0, params.l1 - d1Override));
-    const l2 = params.l2;
+    const l2  = params.l2;
 
-    const Fg_s = params.weightMass * params.gravity;     // > 0
-    const F_buoy_net = netBalloonUpForce();              // > 0
-    const Fg_b = -F_buoy_net;                            // negative in energy convention
+    const Fg_s = params.weightMass*params.gravity;
+    const F_buoy_net = netBalloonUpForce();
+    const Fg_b = -F_buoy_net;
     const Fw_b = FwOverride;
 
-    // coarse scan
+    // Coarse β scan
     let betas = [];
-    for (let b = 0; b < Math.PI/2; b += 0.01) betas.push(b);
-    const isV = (b)=>isValid(b, l1a, l1b, l2, A1, A2);
+    for (let b=0; b<Math.PI/2; b+=0.01) betas.push(b);
+    const isV = b => isValid(b, l1a, l1b, l2, A1, A2);
     const validCoarse = betas.filter(isV);
-    if (validCoarse.length === 0) return null;
+    if (!validCoarse.length) return null;
 
-    // refine window
-    const minB = Math.max(0, validCoarse[0] - 0.01);
-    const maxB = Math.min(Math.PI/2, validCoarse[validCoarse.length-1] + 0.01);
+    // Refine β window
+    const minB = Math.max(0, validCoarse[0]-0.01);
+    const maxB = Math.min(Math.PI/2, validCoarse[validCoarse.length-1]+0.01);
     betas = [];
     const N = 1000;
-    for (let i = 0; i < N; i++) betas.push(minB + (maxB - minB) * i / (N - 1));
+    for (let i=0;i<N;i++) betas.push(minB + (maxB-minB)*i/(N-1));
     while (betas.length && !isV(betas[0])) betas.shift();
     while (betas.length && !isV(betas[betas.length-1])) betas.pop();
-    if (betas.length === 0) return null;
+    if (!betas.length) return null;
 
-    // minimize energy with wind contribution
-    const E = (b)=>energy(b, l1a, l1b, l2, A1, A2, Fg_s, Fg_b, Fw_b);
+    // Minimize energy (with wind)
+    const E = b => energy(b, l1a, l1b, l2, A1, A2, Fg_s, Fg_b, Fw_b);
     let bestB = betas[0], bestE = E(betas[0]);
-    for (let i = 1; i < betas.length; i++) {
-      const e = E(betas[i]);
-      if (e < bestE) { bestE = e; bestB = betas[i]; }
-    }
+    for (let i=1;i<betas.length;i++){ const e = E(betas[i]); if (e < bestE){ bestE=e; bestB=betas[i]; } }
 
     const F = forcesMagnitudes(bestB, l1a, l1b, l2, A1, A2, Fg_s, Fg_b, Fw_b);
     if (!F) return null;
 
-    return {
-      d1: d1Override,
-      xs: F.xs, ys: F.ys, xb: F.xb, yb: F.yb,
-      T1: F.T1,
-      T2: F.T2,
-      T3: F.T3
-    };
+    return { d1:d1Override, xs:F.xs, ys:F.ys, xb:F.xb, yb:F.yb, T1:F.T1, T2:F.T2, T3:F.T3 };
   }
 
-  // ====== Rendering ======
-  function setStatus(text, kind='') {
+  // -------- Rendering --------
+  function setStatus(text, kind=''){
     ui.status.textContent = text;
-    ui.status.className = 'box small ' + (kind==='ok' ? 'ok' : kind==='bad' ? 'bad' : kind==='warn' ? 'warnText' : '');
+    ui.status.className = 'box small ' + (kind==='ok'?'ok':kind==='bad'?'bad':kind==='warn'?'warnText':'');
   }
-  function drawGrid() {
+  function drawGrid(){
     const ctx = ui.ctx; if (!ctx) return;
     const step = params.gridStep;
-    ctx.save();
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = 'rgba(255,255,255,0.035)';
-    for (let x = 0; x <= world.W; x += step) {
-      const p0 = toScreen({ x, y: 0 }), p1 = toScreen({ x, y: world.H });
-      ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
-    }
-    for (let y = 0; y <= world.H; y += step) {
-      const p0 = toScreen({ x: 0, y }), p1 = toScreen({ x: world.W, y });
-      ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
-    }
+    ctx.save(); ctx.lineWidth=1; ctx.strokeStyle='rgba(255,255,255,0.035)';
+    for (let x=0;x<=world.W;x+=step){ const p0=toScreen({x,y:0}), p1=toScreen({x,y:world.H}); ctx.beginPath(); ctx.moveTo(p0.x,p0.y); ctx.lineTo(p1.x,p1.y); ctx.stroke(); }
+    for (let y=0;y<=world.H;y+=step){ const p0=toScreen({x:0,y}), p1=toScreen({x:world.W,y}); ctx.beginPath(); ctx.moveTo(p0.x,p0.y); ctx.lineTo(p1.x,p1.y); ctx.stroke(); }
     ctx.restore();
   }
-  function drawShadedDisc(center, radius, strokeColor, fillColor) {
-    const ctx = ui.ctx;
-    const P = toScreen(center);
-    ctx.beginPath();
-    ctx.arc(P.x, P.y, Math.max(1, radius * P.scale), 0, Math.PI*2);
-    ctx.fillStyle = fillColor;
-    ctx.fill();
-    ctx.setLineDash([6,6]);
-    ctx.lineWidth = 1.2; ctx.strokeStyle = strokeColor; ctx.stroke();
-    ctx.setLineDash([]);
+  function drawShadedDisc(center, radius, strokeColor, fillColor){
+    const ctx = ui.ctx, P = toScreen(center);
+    ctx.beginPath(); ctx.arc(P.x,P.y, Math.max(1, radius*P.scale), 0, Math.PI*2);
+    ctx.fillStyle=fillColor; ctx.fill();
+    ctx.setLineDash([6,6]); ctx.lineWidth=1.2; ctx.strokeStyle=strokeColor; ctx.stroke(); ctx.setLineDash([]);
   }
-  function drawAnchorDot(center, color, label) {
-    const ctx = ui.ctx;
-    const P = toScreen(center);
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.arc(P.x, P.y, 5, 0, Math.PI*2); ctx.fill();
-    ctx.font = '12px system-ui, sans-serif';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#9aa6b2';
-    ctx.fillText(label, P.x + 6, P.y);
+  function drawAnchorDot(center, color, label){
+    const ctx = ui.ctx, P = toScreen(center);
+    ctx.fillStyle=color; ctx.beginPath(); ctx.arc(P.x,P.y,5,0,Math.PI*2); ctx.fill();
+    ctx.font='12px system-ui, sans-serif'; ctx.textBaseline='middle'; ctx.fillStyle='#9aa6b2'; ctx.fillText(label, P.x+6, P.y);
   }
-  function drawTag(text, x, y, opts={}) {
-    const ctx = ui.ctx;
-    const padX = 6;
-    ctx.font = '12px system-ui, sans-serif';
-    const w = ctx.measureText(text).width;
-    const r = 6;
-    const bg = opts.bg || 'rgba(13,18,32,0.85)';
-    const border = opts.border || 'rgba(255,255,255,0.08)';
-    ctx.save();
-    ctx.fillStyle = bg;
-    ctx.strokeStyle = border;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w + padX*2, y, x + w + padX*2, y + 20, r);
-    ctx.arcTo(x + w + padX*2, y + 20, x, y + 20, r);
-    ctx.arcTo(x, y + 20, x, y, r);
-    ctx.arcTo(x, y, x + r, y, r);
-    ctx.closePath();
-    ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#cbd5e1';
-    ctx.fillText(text, x + padX, y + 14);
-    ctx.restore();
+  function drawTag(text, x, y, opts={}){
+    const ctx = ui.ctx, padX=6; ctx.font='12px system-ui, sans-serif'; const w=ctx.measureText(text).width; const r=6;
+    const bg=opts.bg||'rgba(13,18,32,0.85)', border=opts.border||'rgba(255,255,255,0.08)';
+    ctx.save(); ctx.fillStyle=bg; ctx.strokeStyle=border; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w+padX*2,y,x+w+padX*2,y+20,r);
+    ctx.arcTo(x+w+padX*2,y+20,x,y+20,r); ctx.arcTo(x,y+20,x,y,r); ctx.arcTo(x,y,x+r,y,r); ctx.closePath();
+    ctx.fill(); ctx.stroke(); ctx.fillStyle='#cbd5e1'; ctx.fillText(text, x+padX, y+14); ctx.restore();
   }
-  function drawChimneySVG() {
-    const img = assets.chimney;
-    if (!img || !img.complete) return;
-    const ctx = ui.ctx; const s = toScreen({x:0,y:0}).scale;
-    const A1 = anchors().A1;
-    const Hm = 300;
-    const iw = img.naturalWidth || img.width || 1;
-    const ih = img.naturalHeight || img.height || 1;
-    const aspect = iw / ih;
-    const Wm = Hm * aspect;
-    const xRightW = A1.x, yTopW = A1.y, xLeftW = xRightW - Wm;
-    const topLeft = toScreen({x:xLeftW, y:yTopW});
+  function drawChimneySVG(){
+    const img=assets.chimney; if (!img||!img.complete) return;
+    const s = toScreen({x:0,y:0}).scale; const A1 = anchors().A1; const Hm=300;
+    const iw=img.naturalWidth||img.width||1, ih=img.naturalHeight||img.height||1, aspect=iw/ih, Wm=Hm*aspect;
+    const xLeftW = A1.x - Wm, yTopW = A1.y; const topLeft = toScreen({x:xLeftW, y:yTopW});
     ui.ctx.drawImage(img, topLeft.x, topLeft.y, Wm*s, Hm*s);
   }
-  function drawBalloonSVG(balloonPos) {
-    const img = assets.balloon;
-    if (!img || !img.complete) return;
-    const ctx = ui.ctx; const s = toScreen({x:0,y:0}).scale;
-    const Hm = assets.balloonH;
-    const iw = img.naturalWidth || img.width || 1;
-    const ih = img.naturalHeight || img.height || 1;
-    const aspect = iw / ih;
-    const Wm = Hm * aspect;
-    const xLeftW = balloonPos.x - Wm/2;
-    const yTopW  = balloonPos.y + Hm; // bottom-center anchored
-    const topLeft = toScreen({x:xLeftW, y:yTopW});
+  function drawBalloonSVG(balloonPos){
+    const img=assets.balloon; if (!img||!img.complete) return;
+    const s = toScreen({x:0,y:0}).scale; const Hm=assets.balloonH;
+    const iw=img.naturalWidth||img.width||1, ih=img.naturalHeight||img.height||1, aspect=iw/ih, Wm=Hm*aspect;
+    const xLeftW=balloonPos.x - Wm/2, yTopW=balloonPos.y + Hm; const topLeft = toScreen({x:xLeftW, y:yTopW});
     ui.ctx.drawImage(img, topLeft.x, topLeft.y, Wm*s, Hm*s);
   }
-  function drawKonnAt(pos) {
-    const img = assets.konn;
-    if (!img || !img.complete) return;
-    const ctx = ui.ctx; const s = toScreen({x:0,y:0}).scale;
-    const Hm = assets.konnH;
-    const iw = img.naturalWidth || img.width || 1;
-    const ih = img.naturalHeight || img.height || 1;
-    const aspect = iw / ih;
-    const Wm = Hm * aspect;
-    const xLeftW = pos.x - Wm/2;
-    const yTopW  = pos.y + Hm;
-    const topLeft = toScreen({x:xLeftW, y:yTopW});
+  function drawKonnAt(pos){
+    const img=assets.konn; if (!img||!img.complete) return;
+    const s = toScreen({x:0,y:0}).scale; const Hm=assets.konnH;
+    const iw=img.naturalWidth||img.width||1, ih=img.naturalHeight||img.height||1, aspect=iw/ih, Wm=Hm*aspect;
+    const xLeftW=pos.x - Wm/2, yTopW=pos.y + Hm; const topLeft = toScreen({x:xLeftW, y:yTopW});
     ui.ctx.drawImage(img, topLeft.x, topLeft.y, Wm*s, Hm*s);
   }
 
-  // ====== Preview (no solution yet) ======
-  function drawPreview() {
+  // Preview (no solution yet)
+  function drawPreview(){
     const ctx = ui.ctx; if (!ctx) return;
     ctx.clearRect(0,0,ui.canvas.clientWidth, ui.canvas.clientHeight);
     drawGrid();
-
-    // ground
-    ctx.strokeStyle = '#182033'; ctx.lineWidth = 2;
-    const g0 = toScreen({ x: 0, y: 0 }), g1 = toScreen({ x: world.W, y: 0 });
-    ctx.beginPath(); ctx.moveTo(g0.x, g0.y); ctx.lineTo(g1.x, g1.y); ctx.stroke();
-
+    // ground line
+    ctx.strokeStyle='#182033'; ctx.lineWidth=2;
+    const g0=toScreen({x:0,y:0}), g1=toScreen({x:world.W,y:0}); ctx.beginPath(); ctx.moveTo(g0.x,g0.y); ctx.lineTo(g1.x,g1.y); ctx.stroke();
     drawChimneySVG();
-
-    const { A1, A2 } = anchors();
+    // discs & anchors
+    const {A1,A2}=anchors();
     drawShadedDisc(A1, params.l1, '#8bd5ff88', 'rgba(139,213,255,0.08)');
     drawShadedDisc(A2, params.l2, '#c3e88d88', 'rgba(195,232,141,0.08)');
-    drawAnchorDot(A1, '#8bd5ff', 'R1′');
-    drawAnchorDot(A2, '#c3e88d', 'R2′');
-
-    // scale bar
-    const barLen = 100;
-    const bp0 = toScreen({ x: 10, y: 8 }), bp1 = toScreen({ x: 10 + barLen, y: 8 });
-    ctx.strokeStyle = '#2a3146'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(bp0.x, bp0.y); ctx.lineTo(bp1.x, bp1.y); ctx.stroke();
-    ctx.fillStyle = '#78839b'; ctx.font = '12px system-ui, sans-serif';
-    ctx.fillText('100 m', (bp0.x + bp1.x)/2 - 16, bp0.y - 8);
-
-    // HUD reset (preview)
-    ui.hudR1.textContent = '—';
-    ui.hudR2.textContent = '—';
+    drawAnchorDot(A1, '#8bd5ff', 'R1′'); drawAnchorDot(A2, '#c3e88d', 'R2′');
+    // scale bar (100 m)
+    const bp0=toScreen({x:10,y:8}), bp1=toScreen({x:110,y:8});
+    ctx.strokeStyle='#2a3146'; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(bp0.x,bp0.y); ctx.lineTo(bp1.x,bp1.y); ctx.stroke();
+    ctx.fillStyle='#78839b'; ctx.font='12px system-ui, sans-serif'; ctx.fillText('100 m', (bp0.x+bp1.x)/2-16, bp0.y-8);
+    // HUD reset
+    ui.hudR1.textContent = '—'; ui.hudR2.textContent = '—';
   }
-  function drawPreviewWithWind() { drawPreview(); drawWindParticles(); }
+  function drawPreviewWithWind(){ drawPreview(); drawWindParticles(); }
 
-  // ====== Draw state ======
-  function drawState(state) {
-    const ctx = ui.ctx; if (!ctx || !state) return;
-    const { A1, A2 } = anchors();
+  // Draw a computed state
+  function drawState(state){
+    const ctx = ui.ctx; if (!ctx||!state) return;
+    const {A1,A2}=anchors();
     ctx.clearRect(0,0,ui.canvas.clientWidth, ui.canvas.clientHeight);
     drawGrid();
-
     // ground
-    ctx.strokeStyle = '#182033'; ctx.lineWidth = 2;
-    const g0 = toScreen({ x: 0, y: 0 }), g1 = toScreen({ x: world.W, y: 0 });
-    ctx.beginPath(); ctx.moveTo(g0.x, g0.y); ctx.lineTo(g1.x, g1.y); ctx.stroke();
-
+    ctx.strokeStyle='#182033'; ctx.lineWidth=2;
+    const g0=toScreen({x:0,y:0}), g1=toScreen({x:world.W,y:0}); ctx.beginPath(); ctx.moveTo(g0.x,g0.y); ctx.lineTo(g1.x,g1.y); ctx.stroke();
     drawChimneySVG();
-
+    // discs & anchors
     drawShadedDisc(A1, params.l1, '#8bd5ff88', 'rgba(139,213,255,0.08)');
     drawShadedDisc(A2, params.l2, '#c3e88d88', 'rgba(195,232,141,0.08)');
-    drawAnchorDot(A1, '#8bd5ff', 'R1′');
-    drawAnchorDot(A2, '#c3e88d', 'R2′');
+    drawAnchorDot(A1, '#8bd5ff', 'R1′'); drawAnchorDot(A2, '#c3e88d', 'R2′');
 
-    const massP = { x: state.xs, y: state.ys };
-    const ballP = { x: state.xb, y: state.yb };
+    const massP={x:state.xs,y:state.ys}, ballP={x:state.xb,y:state.yb};
 
-    // R1a A1->mass
-    ctx.strokeStyle = '#8bd5ff'; ctx.lineWidth = 2;
-    ctx.beginPath();
-    let p = toScreen(A1), q = toScreen(massP);
-    ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
+    // R1a: chimney→mass
+    ctx.strokeStyle='#8bd5ff'; ctx.lineWidth=2;
+    let p=toScreen(A1), q=toScreen(massP); ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke();
+    // R1b: mass→balloon
+    p=toScreen(massP); q=toScreen(ballP); ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke();
+    // R2: balloon→ground
+    ctx.strokeStyle='#c3e88d'; ctx.beginPath(); p=toScreen(ballP); q=toScreen(A2); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke();
 
-    // R1b mass->balloon
-    ctx.beginPath();
-    p = toScreen(massP); q = toScreen(ballP);
-    ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
-
-    // R2 balloon->A2
-    ctx.strokeStyle = '#c3e88d';
-    ctx.beginPath();
-    p = toScreen(ballP); q = toScreen(A2);
-    ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
-
-    // Mass + balloon visuals
     drawKonnAt(massP);
     drawBalloonSVG(ballP);
 
-    // Tags
-    const bS = toScreen(ballP);
-    drawTag(`(${Math.round(ballP.x)} m, ${Math.round(ballP.y)} m)`, bS.x + 12, bS.y - 26);
-    const mS = toScreen(massP);
-    drawTag(`(${Math.round(massP.x)} m, ${Math.round(massP.y)} m)`, mS.x - 36, mS.y + 12);
+    // coordinate tags (rounded to 1 m)
+    const bS=toScreen(ballP); drawTag(`(${Math.round(ballP.x)} m, ${Math.round(ballP.y)} m)`, bS.x+12, bS.y-26);
+    const mS=toScreen(massP); drawTag(`(${Math.round(massP.x)} m, ${Math.round(massP.y)} m)`, mS.x-36, mS.y+12);
 
-    // HUD tensions
-    ui.hudR1.textContent = fmtN(state.T1);
-    ui.hudR2.textContent = fmtN(state.T3);
+    // HUD tensions in kN (1 decimal)
+    ui.hudR1.textContent = fmtKN1(state.T1);
+    ui.hudR2.textContent = fmtKN1(state.T3);
   }
-  function drawStateWithWind(state) { drawState(state); drawWindParticles(); }
+  function drawStateWithWind(state){ drawState(state); drawWindParticles(); }
 
-  // ====== Precompute (all winds) ======
-  function precomputeForWind(wStep) {
+  // -------- Precompute across D1 and all wind steps --------
+  function precomputeForWind(wStep){
     const arr = new Array(N_FRAMES).fill(null);
-    for (let i = 0; i < N_FRAMES; i++) {
-      const frac = (N_FRAMES === 1) ? 0.5 : i / (N_FRAMES - 1);
-      const d1i = frac * params.l1;
+    for (let i=0;i<N_FRAMES;i++){
+      const frac = (N_FRAMES===1)?0.5 : i/(N_FRAMES-1);
+      const d1i = frac*params.l1;
       arr[i] = solveForD1(d1i, wStep);
     }
     precompByWind.set(wStep, arr);
     return arr;
   }
-  function precomputeAllWinds() {
+  function precomputeAllWinds(){
     precompByWind = new Map();
     for (const w of WIND_STEPS) precomputeForWind(w);
   }
-  function pickStartingIndex(framesArr) {
-    for (let i = anim.idxMin; i <= anim.idxMax; i++) if (framesArr[i]) return i;
-    // fallback anywhere
-    for (let i = 0; i < framesArr.length; i++) if (framesArr[i]) return i;
+  function pickStartingIndex(framesArr){
+    for (let i=anim.idxMin;i<=anim.idxMax;i++) if (framesArr[i]) return i;
+    for (let i=0;i<framesArr.length;i++) if (framesArr[i]) return i;
     return -1;
   }
-  function findNearestValidIndex(framesArr, targetIdx) {
+  function findNearestValidIndex(framesArr, targetIdx){
     targetIdx = clamp(targetIdx, 0, framesArr.length-1);
     if (framesArr[targetIdx]) return targetIdx;
-    let left = targetIdx-1, right = targetIdx+1;
-    while (left >= 0 || right < framesArr.length) {
-      if (left >= 0 && framesArr[left]) return left;
-      if (right < framesArr.length && framesArr[right]) return right;
-      left--; right++;
+    let L=targetIdx-1, R=targetIdx+1;
+    while (L>=0 || R<framesArr.length){
+      if (L>=0 && framesArr[L]) return L;
+      if (R<framesArr.length && framesArr[R]) return R;
+      L--; R++;
     }
     return -1;
   }
 
-  // ====== Animation ======
-  function stepAnim(time) {
+  // -------- Animation loop --------
+  function stepAnim(time){
     if (!anim.running) return;
 
     if (!wind.lastTime) wind.lastTime = time;
     const dt = Math.min(0.05, (time - wind.lastTime)/1000);
     wind.lastTime = time;
-    updateWind(dt);
+    updateWindTargets(); updateWind(dt);
 
-    if (!anim.paused) {
+    if (!anim.paused){
       if (!anim.lastTime) anim.lastTime = time;
       const elapsed = time - anim.lastTime;
-      if (elapsed >= anim.frameInterval) {
+      if (elapsed >= anim.frameInterval){
         anim.lastTime = time;
-
-        // advance index bouncing in [idxMin, idxMax], skipping invalid
         let next = anim.index + anim.dir;
-        if (next > anim.idxMax || next < anim.idxMin) { anim.dir *= -1; next = anim.index + anim.dir; }
+        if (next > anim.idxMax || next < anim.idxMin){ anim.dir *= -1; next = anim.index + anim.dir; }
         let tries = anim.idxMax - anim.idxMin + 1;
-        while (tries-- > 0 && (!frames[next])) {
+        while (tries-- > 0 && (!frames[next])){
           next += anim.dir;
-          if (next > anim.idxMax || next < anim.idxMin) { anim.dir *= -1; next = clamp(next, anim.idxMin, anim.idxMax); }
+          if (next > anim.idxMax || next < anim.idxMin){ anim.dir *= -1; next = clamp(next, anim.idxMin, anim.idxMax); }
         }
         anim.index = clamp(next, anim.idxMin, anim.idxMax);
-
         const state = frames[anim.index];
-        if (state) {
-          // keep D1 slider synced without interrupting animation
+        if (state){
           suppressSliderInput = true;
           params.d1 = state.d1;
           ui.d1.value = String(Math.round(state.d1));
@@ -720,252 +651,187 @@
           setStatus('Animating.', 'ok');
         }
       } else {
-        const state = frames[anim.index];
-        if (state) drawStateWithWind(state);
+        const state = frames[anim.index]; if (state) drawStateWithWind(state);
       }
     } else {
-      const state = frames[anim.index];
-      if (state) drawStateWithWind(state);
+      const state = frames[anim.index]; if (state) drawStateWithWind(state);
     }
     requestAnimationFrame(stepAnim);
   }
 
-  function startAnimation() {
-    stopWindLoop(); // switch to animation loop
+  function startAnimation(){
+    stopWindLoop();
     precomputeAllWinds();
 
     anim.windStep = nearestWindStep(params.Fw_b);
     frames = precompByWind.get(anim.windStep) || precomputeForWind(anim.windStep);
 
     const startIdx = pickStartingIndex(frames);
-    if (startIdx === -1) {
+    if (startIdx === -1){
       setStatus('No valid mass positions for current settings. Adjust lengths/anchors.', 'bad');
       startWindLoop();
       return;
     }
-
-    anim.running = true;
-    anim.paused = false;
-    anim.index = startIdx;
-    anim.dir = 1;
-    anim.lastTime = 0;
-    wind.lastTime = 0;
-    ui.btnPlayPause.disabled = false;
-    ui.btnPlayPause.textContent = 'Pause';
+    anim.running=true; anim.paused=false; anim.index=startIdx; anim.dir=1; anim.lastTime=0; wind.lastTime=0;
+    ui.btnPlayPause.disabled=false; ui.btnPlayPause.textContent='Pause';
     setStatus('Animating.', 'ok');
     drawStateWithWind(frames[anim.index]);
     requestAnimationFrame(stepAnim);
   }
-
-  function togglePlayPause() {
+  function togglePlayPause(){
     if (!anim.running) return;
     anim.paused = !anim.paused;
     ui.btnPlayPause.textContent = anim.paused ? 'Play' : 'Pause';
     setStatus(anim.paused ? 'Paused.' : 'Animating.', anim.paused ? 'warn' : 'ok');
-    if (!anim.paused) { anim.lastTime = 0; wind.lastTime = 0; }
+    if (!anim.paused){ anim.lastTime=0; wind.lastTime=0; }
   }
 
-  // ====== UI wiring ======
-  function setupCanvas() {
-    const c = ui.canvas;
-    const pr = ui.devicePR;
-    const parent = c.parentElement;
-    const pad = 2;
-    const w = Math.max(320, parent.clientWidth - pad*2);
-    const h = Math.max(280, parent.clientHeight - pad*2);
-    c.style.width = w + 'px';
-    c.style.height = h + 'px';
-    c.width = Math.floor(w * pr);
-    c.height = Math.floor(h * pr);
-    ui.ctx = c.getContext('2d');
-    ui.ctx.setTransform(pr, 0, 0, pr, 0, 0);
+  // -------- UI wiring --------
+  function setupCanvas(){
+    const c=ui.canvas, pr=ui.devicePR, parent=c.parentElement, pad=2;
+    const w=Math.max(320, parent.clientWidth - pad*2);
+    const h=Math.max(280, parent.clientHeight - pad*2);
+    c.style.width=w+'px'; c.style.height=h+'px';
+    c.width=Math.floor(w*pr); c.height=Math.floor(h*pr);
+    ui.ctx=c.getContext('2d'); ui.ctx.setTransform(pr,0,0,pr,0,0);
     drawPreviewWithWind();
   }
-  window.addEventListener('resize', () => {
+  window.addEventListener('resize', ()=>{
     setupCanvas();
     if (!anim.running && wind.loopActive) initWindParticles();
-  }, { passive: true });
+  }, {passive:true});
 
-  function manageWindLoop() {
+  function manageWindLoop(){
     if (!anim.running && params.windVisible) startWindLoop();
     else if (!anim.running) stopWindLoop();
   }
 
-  function syncUIGeometry() {
-    // called when geometry sliders change (L1, L2, D2)
-    // read sliders
-    params.l1 = +ui.l1.value;
-    params.d1 = clamp(+ui.d1.value, 0, params.l1);
-    params.l2 = +ui.l2.value;
-    params.d2 = +ui.d2.value;
+  function syncUIGeometry(){
+    params.l1=+ui.l1.value;
+    params.d1=clamp(+ui.d1.value, 0, params.l1);
+    params.l2=+ui.l2.value;
+    params.d2=+ui.d2.value;
 
-    // reflect text
-    ui.vL1.textContent = params.l1;
-    ui.vD1.textContent = params.d1;
-    ui.vL2.textContent = params.l2;
-    ui.vD2.textContent = params.d2;
+    ui.vL1.textContent=params.l1;
+    ui.vD1.textContent=params.d1;
+    ui.vL2.textContent=params.l2;
+    ui.vD2.textContent=params.d2;
 
-    // keep D1 within [0, L1]
-    ui.d1.max = String(params.l1);
+    ui.d1.max=String(params.l1);
 
-    // geometry change invalidates precomputed data — stop animation
-    anim.running = false;
-    anim.paused = false;
-    frames = [];
-    precompByWind = new Map();
-    ui.btnPlayPause.disabled = true;
-    ui.btnPlayPause.textContent = 'Pause';
+    anim.running=false; anim.paused=false; frames=[]; precompByWind=new Map();
+    ui.btnPlayPause.disabled=true; ui.btnPlayPause.textContent='Pause';
     drawPreviewWithWind();
     setStatus('Adjusted geometry. Click “Simulate” to precompute for all winds.', '');
     manageWindLoop();
   }
 
-  // Slider D1 interactions: pause on grab; update view while dragging; resume on release.
-  ui.d1.addEventListener('pointerdown', () => {
-    if (anim.running && !anim.paused) {
-      anim.paused = true;
-      ui.btnPlayPause.textContent = 'Play';
-      anim.autoResumeAfterDrag = true;
+  // D1 slider interactions
+  ui.d1.addEventListener('pointerdown', ()=>{
+    if (anim.running && !anim.paused){
+      anim.paused=true; ui.btnPlayPause.textContent='Play'; anim.autoResumeAfterDrag=true;
       setStatus('Paused (slider drag).', 'warn');
     }
-    isDraggingSlider = true;
-  }, { passive: true });
-  window.addEventListener('pointerup', () => {
-    if (isDraggingSlider) {
-      isDraggingSlider = false;
-      if (anim.running && anim.autoResumeAfterDrag) {
-        // Snap animation index to nearest precomputed frame (current wind) and resume
-        const idxTarget = Math.round((params.d1 / params.l1) * (N_FRAMES - 1));
-        const nearest = findNearestValidIndex(frames, idxTarget);
+    isDraggingSlider=true;
+  }, {passive:true});
+  window.addEventListener('pointerup', ()=>{
+    if (isDraggingSlider){
+      isDraggingSlider=false;
+      if (anim.running && anim.autoResumeAfterDrag){
+        const idxTarget = Math.round((params.d1/params.l1)*(N_FRAMES-1));
+        const nearest   = findNearestValidIndex(frames, idxTarget);
         if (nearest !== -1) anim.index = nearest;
-        anim.paused = false;
-        anim.autoResumeAfterDrag = false;
-        ui.btnPlayPause.textContent = 'Pause';
-        setStatus('Animating.', 'ok');
-        anim.lastTime = 0;
-        wind.lastTime = 0;
+        anim.paused=false; anim.autoResumeAfterDrag=false; ui.btnPlayPause.textContent='Pause';
+        setStatus('Animating.', 'ok'); anim.lastTime=0; wind.lastTime=0;
       }
     }
-  }, { passive: true });
-
-  ui.d1.addEventListener('input', () => {
+  }, {passive:true});
+  ui.d1.addEventListener('input', ()=>{
     if (suppressSliderInput) return;
     params.d1 = clamp(+ui.d1.value, 0, params.l1);
     ui.vD1.textContent = params.d1;
-
-    if (anim.running) {
-      // Snap to nearest valid index at current wind without stopping animation
-      const idxTarget = Math.round((params.d1 / params.l1) * (N_FRAMES - 1));
+    if (anim.running){
+      const idxTarget = Math.round((params.d1/params.l1)*(N_FRAMES-1));
       const nearest = findNearestValidIndex(frames, idxTarget);
-      if (nearest !== -1) {
-        anim.index = nearest;
-        const state = frames[anim.index];
-        if (state) drawStateWithWind(state);
-      } else {
-        setStatus('No valid equilibrium at this D1 for current wind.', 'bad');
-      }
+      if (nearest !== -1){ anim.index = nearest; const s=frames[anim.index]; if (s) drawStateWithWind(s); }
+      else setStatus('No valid equilibrium at this D1 for current wind.', 'bad');
     } else {
       drawPreviewWithWind();
     }
-  }, { passive: true });
+  }, {passive:true});
 
   // Geometry sliders
-  ['l1','l2','d2'].forEach(id => ui[id].addEventListener('input', () => {
-    if (id === 'l1') {
-      const newMax = +ui.l1.value;
-      const newD1 = clamp(+ui.d1.value, 0, newMax);
-      ui.d1.max = String(newMax);
-      if (+ui.d1.value !== newD1) {
-        suppressSliderInput = true;
-        ui.d1.value = String(newD1);
-        suppressSliderInput = false;
+  ['l1','l2','d2'].forEach(id=>ui[id].addEventListener('input', ()=>{
+    if (id==='l1'){
+      const newMax=+ui.l1.value, newD1=clamp(+ui.d1.value, 0, newMax);
+      ui.d1.max=String(newMax);
+      if (+ui.d1.value !== newD1){
+        suppressSliderInput=true; ui.d1.value=String(newD1); suppressSliderInput=false;
       }
     }
     syncUIGeometry();
-  }, { passive: true }));
+  }, {passive:true}));
 
-  // Wind slider — live switch without stopping animation
-  ui.fw.addEventListener('input', () => {
+  // Wind slider: live switch among precomputed wind sets
+  ui.fw.addEventListener('input', ()=>{
     params.Fw_b = +ui.fw.value;
     ui.vFW.textContent = params.Fw_b;
     updateWindTargets();
 
-    if (anim.running) {
+    if (anim.running){
       const newStep = nearestWindStep(params.Fw_b);
-      if (newStep !== anim.windStep) {
-        // switch frames set; compute if needed
+      if (newStep !== anim.windStep){
         let framesArr = precompByWind.get(newStep);
         if (!framesArr) framesArr = precomputeForWind(newStep);
         anim.windStep = newStep;
         frames = framesArr;
 
-        // keep same mass distance if possible: snap to nearest valid index (prefer current D1)
-        const d1Wanted = params.d1; // already synced to current state in the loop
-        const idxTarget = Math.round((d1Wanted / params.l1) * (N_FRAMES - 1));
+        const d1Wanted = params.d1;
+        const idxTarget = Math.round((d1Wanted/params.l1)*(N_FRAMES-1));
         let nearest = findNearestValidIndex(frames, idxTarget);
-        if (nearest === -1) {
-          // fallback inside animation window
-          nearest = pickStartingIndex(frames);
-        }
-        if (nearest !== -1) {
-          anim.index = nearest;
-          // redraw immediately with new wind
-          anim.lastTime = 0;
-          wind.lastTime = 0;
-          const state = frames[anim.index];
-          if (state) drawStateWithWind(state);
+        if (nearest === -1) nearest = pickStartingIndex(frames);
+        if (nearest !== -1){
+          anim.index = nearest; anim.lastTime=0; wind.lastTime=0;
+          const s = frames[anim.index]; if (s) drawStateWithWind(s);
         } else {
           setStatus('No valid mass positions for this wind. Adjust lengths/anchors.', 'bad');
         }
       } else {
-        // same step; just redraw to reflect wind overlay
-        const state = frames[anim.index];
-        if (state) drawStateWithWind(state);
+        const s = frames[anim.index]; if (s) drawStateWithWind(s);
       }
     } else {
-      // not running: preview with wind particles
       drawPreviewWithWind();
       manageWindLoop();
     }
-  }, { passive: true });
+  }, {passive:true});
 
-  // Checkbox: wind visible
-  ui.windVisible.addEventListener('input', () => {
+  // Wind visibility
+  ui.windVisible.addEventListener('input', ()=>{
     params.windVisible = !!ui.windVisible.checked;
     updateWindTargets();
     if (!anim.running) manageWindLoop();
-  }, { passive: true });
+  }, {passive:true});
 
+  // Buttons
   ui.btnSim.addEventListener('click', startAnimation);
   ui.btnPlayPause.addEventListener('click', togglePlayPause);
 
-  // ====== Init ======
-  function setupCanvasFirst() {
-    const c = ui.canvas;
-    const pr = ui.devicePR;
-    const parent = c.parentElement;
-    const pad = 2;
-    const w = Math.max(320, parent.clientWidth - pad*2);
-    const h = Math.max(280, parent.clientHeight - pad*2);
-    c.style.width = w + 'px';
-    c.style.height = h + 'px';
-    c.width = Math.floor(w * pr);
-    c.height = Math.floor(h * pr);
-    ui.ctx = c.getContext('2d');
-    ui.ctx.setTransform(pr, 0, 0, pr, 0, 0);
+  // -------- Canvas bootstrapping --------
+  function setupCanvasFirst(){
+    const c=ui.canvas, pr=ui.devicePR, parent=c.parentElement, pad=2;
+    const w=Math.max(320, parent.clientWidth - pad*2);
+    const h=Math.max(280, parent.clientHeight - pad*2);
+    c.style.width=w+'px'; c.style.height=h+'px';
+    c.width=Math.floor(w*pr); c.height=Math.floor(h*pr);
+    ui.ctx=c.getContext('2d'); ui.ctx.setTransform(pr,0,0,pr,0,0);
   }
-  function init() {
+  function init(){
     setupCanvasFirst();
-    ui.vL1.textContent = params.l1;
-    ui.vD1.textContent = params.d1;
-    ui.vL2.textContent = params.l2;
-    ui.vD2.textContent = params.d2;
-    ui.vFW.textContent = params.Fw_b;
-
+    ui.vL1.textContent=params.l1; ui.vD1.textContent=params.d1;
+    ui.vL2.textContent=params.l2; ui.vD2.textContent=params.d2;
+    ui.vFW.textContent=params.Fw_b;
     params.windVisible = !!ui.windVisible.checked;
-    initWindParticles();
-    updateWindTargets();
-    drawPreviewWithWind();
+    initWindParticles(); updateWindTargets(); drawPreviewWithWind();
     if (params.windVisible) startWindLoop();
   }
   init();
