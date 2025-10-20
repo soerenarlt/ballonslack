@@ -105,11 +105,9 @@
     button.primary { background: var(--accent); border-color: var(--accent); color: #0b0e14; }
     button:disabled { opacity: .6; cursor: not-allowed; }
 
-    /* HUD (Tension panel) — positioned inside the canvas area, but we compute its top/right
-       from the *grid corner* (world W,H → screen). JS will set left/top every draw/resize. */
+    /* HUD (Tension panel) — JS positions it at the grid's top-right corner */
     .hud {
       position: absolute;
-      /* top/left set dynamically in JS to sit at grid top-right with padding */
       background: rgba(9,12,20,0.85);
       border: 1px solid #1b2440;
       backdrop-filter: blur(4px);
@@ -196,7 +194,7 @@
 <script>
 (() => {
   // VERSION string for cache-busting assets (append ?v=VERSION)
-  const VERSION = 'v2025-10-20-03';
+  const VERSION = 'v2025-10-20-04';
 
   // -------- World & UI handles --------
   const world = { W: 400, H: 400 };
@@ -369,16 +367,13 @@
     if (!ui.ctx) return;
     const hud = ui.hudBox;
     if (!hud) return;
-    // screen coords of world top-right: (W, H)
-    const tr = toScreen({x: world.W, y: world.H});
-    // We want HUD's top-right to sit padPx inside the grid corner
+    const tr = toScreen({x: world.W, y: world.H}); // world top-right
     const hudWidth = hud.offsetWidth || 220;
     const hudHeight = hud.offsetHeight || 60;
     const left = Math.round(tr.x - hudWidth - padPx);
     const top  = Math.round(tr.y + padPx);
     hud.style.left = left + 'px';
     hud.style.top  = top  + 'px';
-    // Ensure 'right' is not constraining layout
     hud.style.right = '';
   }
 
@@ -462,16 +457,16 @@
     const Fg_b = -F_buoy_net;
     const Fw_b = FwOverride;
 
-    // Coarse β scan
+    // Coarse β scan — EXPANDED to [0, π]
     let betas = [];
-    for (let b=0; b<Math.PI/2; b+=0.01) betas.push(b);
+    for (let b=0; b<=Math.PI; b+=0.01) betas.push(b);
     const isV = b => isValid(b, l1a, l1b, l2, A1, A2);
     const validCoarse = betas.filter(isV);
     if (!validCoarse.length) return null;
 
-    // Refine β window
+    // Refine β window (still capped to [0, π])
     const minB = Math.max(0, validCoarse[0]-0.01);
-    const maxB = Math.min(Math.PI/2, validCoarse[validCoarse.length-1]+0.01);
+    const maxB = Math.min(Math.PI, validCoarse[validCoarse.length-1]+0.01);
     betas = [];
     const N = 1000;
     for (let i=0;i<N;i++) betas.push(minB + (maxB-minB)*i/(N-1));
@@ -829,16 +824,16 @@
     }
   }, {passive:true});
 
+  // Buttons
+  ui.btnSim.addEventListener('click', ()=>{ startAnimation(); positionHUD(10); });
+  ui.btnPlayPause.addEventListener('click', togglePlayPause);
+
   // Wind visibility
   ui.windVisible.addEventListener('input', ()=>{
     params.windVisible = !!ui.windVisible.checked;
     updateWindTargets();
     if (!anim.running) manageWindLoop();
   }, {passive:true});
-
-  // Buttons
-  ui.btnSim.addEventListener('click', ()=>{ startAnimation(); positionHUD(10); });
-  ui.btnPlayPause.addEventListener('click', togglePlayPause);
 
   // -------- Canvas bootstrapping --------
   function setupCanvasFirst(){
@@ -864,3 +859,4 @@
 </script>
 </body>
 </html>
+
